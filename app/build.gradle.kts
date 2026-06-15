@@ -1,7 +1,9 @@
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RelativePath
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Internal
@@ -64,7 +66,13 @@ abstract class GenerateProtoTask : DefaultTask() {
             val url = protocUrl.get()
             logger.lifecycle("Downloading protoc ${url.substringAfterLast('/')} from $url")
             protocFile.parentFile.mkdirs()
-            URL(url).openStream().use { input ->
+            val connection = URL(url).openConnection() as java.net.HttpURLConnection
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            val responseCode = connection.responseCode
+            if (responseCode !in 200..299) {
+                throw GradleException("Failed to download protoc: Server returned HTTP response code $responseCode for URL: $url")
+            }
+            connection.inputStream.use { input ->
                 protocFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
@@ -94,12 +102,16 @@ android {
         applicationId = applicationIdOverride ?: baseApplicationId
         minSdk = 26
         targetSdk = 36
-        versionCode = 147
-        versionName = "13.4.3"
+        versionCode = 148
+        versionName = "13.5.0"
         resValue("string", "app_name", appNameOverride ?: "Metrolist")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
 
         // LastFM API keys from GitHub Secrets
         val lastFmKey = localProperties.getProperty("LASTFM_API_KEY") ?: System.getenv("LASTFM_API_KEY") ?: ""
@@ -108,30 +120,42 @@ android {
         buildConfigField("String", "LASTFM_API_KEY", "\"$lastFmKey\"")
         buildConfigField("String", "LASTFM_SECRET", "\"$lastFmSecret\"")
         buildConfigField("String", "ARCHITECTURE", "\"universal\"")
+        manifestPlaceholders["discordAppId"] = ""
     }
 
     flavorDimensions += listOf("variant")
     productFlavors {
-        // FOSS variant (default) - F-Droid compatible, no Google Play Services
+        // FOSS - Updater, but no gcast or rpc
         create("foss") {
             dimension = "variant"
             isDefault = true
             buildConfigField("Boolean", "CAST_AVAILABLE", "false")
             buildConfigField("Boolean", "UPDATER_AVAILABLE", "true")
+            buildConfigField("Boolean", "DISCORD_RPC_AVAILABLE", "false")
         }
 
-        // GMS variant - with Google Cast support (requires Google Play Services)
+        // GMS - Updater, gcast, and rpc
         create("gms") {
             dimension = "variant"
             buildConfigField("Boolean", "CAST_AVAILABLE", "true")
             buildConfigField("Boolean", "UPDATER_AVAILABLE", "true")
+            buildConfigField("Boolean", "DISCORD_RPC_AVAILABLE", "true")
+            buildConfigField("Long", "DISCORD_APP_ID", "1447278780795064401L")
+            manifestPlaceholders["discordAppId"] = "1447278780795064401"
+
+            externalNativeBuild {
+                cmake {
+                    arguments("-DDISCORD_BRIDGE=ON")
+                }
+            }
         }
 
-        // IzzyOnDroid variant - no Google Cast, no built-in updater (store handles updates)
+        // IzzyOnDroid - no gcast, no updater, no rpc - the ONLY F-droid compliant build
         create("izzy") {
             dimension = "variant"
             buildConfigField("Boolean", "CAST_AVAILABLE", "false")
             buildConfigField("Boolean", "UPDATER_AVAILABLE", "false")
+            buildConfigField("Boolean", "DISCORD_RPC_AVAILABLE", "false")
         }
     }
 
@@ -228,6 +252,12 @@ android {
         generateLocaleConfig = true
     }
 
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = false
@@ -298,6 +328,25 @@ tasks.configureEach {
     }
 }
 
+val extractDiscordSo = tasks.register<Copy>("extractDiscordSo") {
+    description = "Extracts libdiscord_partner_sdk.so from the AAR into src/gms/jniLibs"
+    from(zipTree("libs/discord_partner_sdk.aar").matching {
+        include("jni/**/libdiscord_partner_sdk.so")
+    })
+    into(file("src/gms/jniLibs"))
+    eachFile {
+        val parts = relativePath.segments
+        relativePath = RelativePath(true, *parts.drop(1).toTypedArray())
+    }
+    includeEmptyDirs = false
+}
+
+tasks.configureEach {
+    if (name.startsWith("buildCMake") || name.startsWith("configureCMake") || name.startsWith("merge") && name.contains("JniLib")) {
+        dependsOn(extractDiscordSo)
+    }
+}
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -350,6 +399,8 @@ dependencies {
 
     implementation(libs.coil)
     implementation(libs.coil.network.okhttp)
+    implementation(libs.browser)
+    implementation(libs.security.crypto)
 
     implementation(libs.ucrop)
 
@@ -379,7 +430,7 @@ dependencies {
     implementation(project(":innertube"))
     implementation(project(":kugou"))
     implementation(project(":lrclib"))
-    implementation(project(":discordrpc"))
+    "gmsImplementation"(files("libs/discord_partner_sdk.aar"))
     implementation(project(":lastfm"))
     implementation(project(":betterlyrics"))
     implementation(project(":shazamkit"))

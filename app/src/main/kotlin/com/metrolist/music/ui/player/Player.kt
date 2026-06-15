@@ -126,6 +126,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.Player.STATE_ENDED
 import androidx.navigation.NavController
 import androidx.palette.graphics.Palette
+import com.metrolist.music.LocalNavController
 import coil3.compose.AsyncImage
 import coil3.imageLoader
 import coil3.request.ImageRequest
@@ -755,6 +756,27 @@ fun BottomSheetPlayer(
         }
     }
 
+    // Auto-switch from repeat one to repeat all when song ends naturally
+    var previousMediaId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(playbackState, mediaMetadata?.id) {
+        val currentId = mediaMetadata?.id
+
+        // Only switch from REPEAT_ONE to REPEAT_ALL when playback naturally ended
+        // (i.e., the player transitioned to ENDED state and then moved to next track).
+        // Do NOT switch on manual skips.
+        if (currentId != null &&
+            currentId != previousMediaId &&
+            previousMediaId != null &&
+            playbackState == Player.STATE_ENDED &&
+            repeatMode == Player.REPEAT_MODE_ONE &&
+            !isListenTogetherGuest) {
+            playerConnection.player.setRepeatMode(Player.REPEAT_MODE_ALL)
+        }
+
+        previousMediaId = currentId
+    }
+
     // When casting, use Cast position/duration directly
     // But wait a bit after manual seeks to let Cast catch up
     LaunchedEffect(isCasting, castPosition, castDuration) {
@@ -1322,7 +1344,6 @@ fun BottomSheetPlayer(
                         } else {
                             PlayerMoreMenuButton(
                                 mediaMetadata = mediaMetadata,
-                                navController = navController,
                                 state = state,
                                 textButtonColor = textButtonColor,
                                 iconButtonColor = iconButtonColor,
@@ -1933,7 +1954,6 @@ fun BottomSheetPlayer(
             Queue(
                 state = queueSheetState,
                 playerBottomSheetState = state,
-                navController = navController,
                 background =
                     if (useBlackBackground) {
                         Color.Black
@@ -2119,7 +2139,6 @@ fun MoreActionsButton(
                     menuState.show {
                         PlayerMenu(
                             mediaMetadata = mediaMetadata,
-                            navController = navController,
                             playerBottomSheetState = state,
                             onShowDetailsDialog = {
                                 mediaMetadata.id.let {
@@ -2144,11 +2163,11 @@ fun MoreActionsButton(
 @Composable
 private fun PlayerMoreMenuButton(
     mediaMetadata: MediaMetadata,
-    navController: NavController,
     state: BottomSheetState,
     textButtonColor: Color,
     iconButtonColor: Color,
 ) {
+    val navController = LocalNavController.current
     val menuState = LocalMenuState.current
     val bottomSheetPageState = LocalBottomSheetPageState.current
 
@@ -2163,7 +2182,6 @@ private fun PlayerMoreMenuButton(
                     menuState.show {
                         PlayerMenu(
                             mediaMetadata = mediaMetadata,
-                            navController = navController,
                             playerBottomSheetState = state,
                             onShowDetailsDialog = {
                                 mediaMetadata.id.let {

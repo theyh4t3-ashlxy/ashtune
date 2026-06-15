@@ -22,6 +22,7 @@ import coil3.request.CachePolicy
 import coil3.request.allowHardware
 import coil3.request.crossfade
 import com.metrolist.innertube.YouTube
+import com.metrolist.innertube.models.ArtistConjunctions
 import com.metrolist.innertube.models.YouTubeLocale
 import com.metrolist.kugou.KuGou
 import com.metrolist.lastfm.LastFM
@@ -77,10 +78,12 @@ class App :
             Timber.e(e, "Failed to ensure DataStore directory")
         }
 
+        // Plant logging BEFORE cipher init so the synchronous config-store load
+        // (bundled asset + cached overlay) is captured, not just the async remote refresh.
+        Timber.plant(Timber.DebugTree())
+
         // Initialize cipher deobfuscator for WEB_REMIX streaming
         CipherDeobfuscator.initialize(this)
-
-        Timber.plant(Timber.DebugTree())
 
         // Pre-read Coil cache size on background to avoid runBlocking in newImageLoader
         applicationScope.launch(Dispatchers.IO) {
@@ -98,6 +101,12 @@ class App :
         val settings = dataStore.data.first()
         val locale = Locale.getDefault()
         val languageTag = locale.language
+
+        ArtistConjunctions.conjunctions = listOf(
+            R.string.and,
+        ).mapNotNull { id ->
+            runCatching { getString(id) }.getOrNull()
+        }
 
         YouTube.locale =
             YouTubeLocale(
